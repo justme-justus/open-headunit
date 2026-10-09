@@ -22,6 +22,7 @@ import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.zbt.ZbtAaCarri
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.zbt.ZbtAttemptPolicy
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.zbt.ZbtRetransmitPolicy
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.zbt.ZbtDaemonReachability
+import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.unix.RawUnixSocketCarrier
 import com.andrerinas.openheadunit.utils.AppLog
 import com.andrerinas.openheadunit.utils.ConnectionIssue
 import com.andrerinas.openheadunit.utils.ConnectionIssues
@@ -120,12 +121,18 @@ class NativeAaHandshakeManager(
                 settings.externalBtZbtTransport,
                 settings.nativeAaIgnoreExternalBt,
                 // A read, never a dial. This runs on the UI path, and the dial is a socket connect.
-                ZbtDaemonReachability.cached()
+                ZbtDaemonReachability.cached(),
+                RawUnixSocketCarrier.isSocketAvailable()
             )
         }
 
         fun checkCompatibility(context: Context): Boolean {
             when (transportRoute(context)) {
+                // The raw Unix domain socket (/dev/socket/zj_bt_socket) directly carries RFCOMM frames.
+                ExternalBtTransportPolicy.Route.RAW_UNIX_SOCKET -> {
+                    AppLog.i("NativeAA: Bluetooth runs over raw Unix domain socket (/dev/socket/zj_bt_socket), compatibility check SUCCESS.")
+                    return true
+                }
                 // The module has its own listener and its own compatibility, established by the
                 // daemon answering at connection time. Nothing below measures that.
                 ExternalBtTransportPolicy.Route.ZBT -> {
@@ -328,6 +335,7 @@ class NativeAaHandshakeManager(
     // only between start() and stop() on that route; it replaces the RFCOMM listeners entirely
     // rather than running beside them.
     @Volatile private var zbtCarrier: ZbtAaCarrier? = null
+    @Volatile private var rawUnixCarrier: RawUnixSocketCarrier? = null
     // The coroutine serving [activeHandshakeLink]. Closing a superseded handshake's link only
     // ends it on stacks where close() interrupts a pending read; some do not, and it runs on for
     // minutes. Cancelling cannot break a blocking JNI read either, but it does end every real
@@ -759,6 +767,11 @@ class NativeAaHandshakeManager(
         // see this as genuinely stopped. Nothing here is retryable, but a listener that was never
         // opened must not be reported as up.
         when (transportRoute(context)) {
+            // The raw Unix domain socket (/dev/socket/zj_bt_socket) carries the RFCOMM stream directly.
+            ExternalBtTransportPolicy.Route.RAW_UNIX_SOCKET -> {
+                startOverRawUnixSocket()
+                return
+            }
             // The module carries the handshake instead, over its own channel. None of the RFCOMM
             // setup below applies to it.
             ExternalBtTransportPolicy.Route.ZBT -> {
@@ -2285,6 +2298,45 @@ class NativeAaHandshakeManager(
         }
     }
 
+    private fun startOverRawUnixSocket() {
+        isRunning = true
+        notStartedReason = null
+        aaListenersClosedForSession = false
+        localRadioName = "raw Unix domain socket (/dev/socket/zj_bt_socket)"
+        AppLog.i(
+            "NativeAA: raw Unix domain socket transport is on (${BluetoothHelper.externalBtEvidence}) " +
+                "— the handshake will connect to /dev/socket/zj_bt_socket directly."
+        )
+        val carrier = RawUnixSocketCarrier(
+            serve = { link ->
+                ConnectionStageTracker.report(ConnectionStage.PHONE_ANSWERED)
+                handleHandshake(link)
+            },
+            isRunning = { isRunning },
+            isFinishedForSession = { aaListenersClosedForSession },
+            isSessionConnected = { commManager.isConnected },
+            isHandshakeInFlight = { isHandshakeInFlight() },
+            mayServeHandshake = { NativeHandoffPolicy.shouldServeHandshake(consecutiveHandshakeFailures) },
+            onPhoneEvidence = { resetHandshakeBackoff() },
+            retryDelayMs = {
+                JoinRefusalPolicy.retryDelayMs(
+                    consecutiveJoinRefusals,
+                    RawUnixSocketCarrier.DEFAULT_RETRY_INTERVAL_MS
+                )
+            }
+        )
+        rawUnixCarrier = carrier
+        scope.launch(Dispatchers.IO + CoroutineName("NativeAa-RawUnixCarrier")) {
+            try {
+                carrier.run()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("NativeAA: [RawUnix] carrier stopped unexpectedly: ${e.message}", e)
+            }
+        }
+    }
+
     private fun refuseWhileBackedOff(link: HandshakeLink): Boolean {
         if (NativeHandoffPolicy.shouldServeHandshake(consecutiveHandshakeFailures)) return false
         if (!loggedHandshakeBackoff) {
@@ -3201,6 +3253,8 @@ class NativeAaHandshakeManager(
         // wake requests to a dead channel.
         zbtCarrier?.close()
         zbtCarrier = null
+        rawUnixCarrier?.close()
+        rawUnixCarrier = null
         wppTcpServer?.stop()
         wppTcpServer = null
         try { aaServerSocket?.close() } catch (e: Exception) {}

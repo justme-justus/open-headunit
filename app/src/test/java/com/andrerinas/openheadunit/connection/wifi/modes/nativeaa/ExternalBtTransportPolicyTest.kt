@@ -162,6 +162,13 @@ class ExternalBtTransportPolicyTest {
     }
 
     @Test
+    fun `unix socket presence takes RAW_UNIX_SOCKET route even on external BT evidence`() {
+        assertEquals(Route.RAW_UNIX_SOCKET, ExternalBtTransportPolicy.route(evidence, unixSocketAvailable = true))
+        assertFalse(ExternalBtTransportPolicy.refusesBringUp(evidence, false, false, null, unixSocketAvailable = true))
+        assertFalse(ExternalBtTransportPolicy.needsDaemonMeasurement(evidence, false, false, null, unixSocketAvailable = true))
+    }
+
+    @Test
     fun `refusing and still-worth-asking are exact complements of a blocked route`() {
         // Neither may be relaxed on its own: together they must cover BLOCKED exactly once.
         val cases = listOf<Boolean?>(null, true, false)

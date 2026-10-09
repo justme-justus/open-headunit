@@ -15,6 +15,7 @@ import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.NativeAaHandsh
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.SoftApCredentialsProvider
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.NativeStrategy
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.zbt.ZbtDaemonReachability
+import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.unix.RawUnixSocketCarrier
 import com.andrerinas.openheadunit.connection.wifi.WifiLauncher
 import com.andrerinas.openheadunit.connection.wifi.WifiLauncherManager
 import com.andrerinas.openheadunit.connection.wifi.WifiLauncherMode
@@ -83,6 +84,7 @@ class WifiLauncherNative : WifiLauncher {
             settings.externalBtZbtTransport,
             settings.nativeAaIgnoreExternalBt,
             ZbtDaemonReachability.cached(),
+            RawUnixSocketCarrier.isSocketAvailable()
         )
         if (blockedByExternalBt) NativeAaHandshakeManager.externalBtDiagnostic()?.let { AppLog.e(it) }
 

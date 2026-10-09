@@ -29,6 +29,9 @@ object ExternalBtTransportPolicy {
         /** The external module, through the vendor daemon. */
         ZBT,
 
+        /** Raw Unix Domain Socket (e.g. /dev/socket/zj_bt_socket on Unisoc/Zlink platforms). */
+        RAW_UNIX_SOCKET,
+
         /** External Bluetooth, and no route through it: refuse mode 3 and say why. */
         BLOCKED
     }
@@ -46,14 +49,17 @@ object ExternalBtTransportPolicy {
      * @param zbtTransportEnabled the user's opt-in, `Settings.externalBtZbtTransport`
      * @param ignoreExternalBt the compatibility override, `Settings.nativeAaIgnoreExternalBt`
      * @param daemonReachable whether the vendor daemon answered, or null if it has not been asked
+     * @param unixSocketAvailable whether /dev/socket/zj_bt_socket is present
      */
     fun route(
         externalBtEvidence: String?,
         zbtTransportEnabled: Boolean,
         ignoreExternalBt: Boolean,
-        daemonReachable: Boolean? = null
+        daemonReachable: Boolean? = null,
+        unixSocketAvailable: Boolean = false
     ): Route = when {
         externalBtEvidence == null -> Route.NORMAL
+        unixSocketAvailable -> Route.RAW_UNIX_SOCKET
         zbtTransportEnabled -> Route.ZBT
         ignoreExternalBt -> Route.NORMAL
         daemonReachable == true -> Route.ZBT
@@ -70,12 +76,13 @@ object ExternalBtTransportPolicy {
         externalBtEvidence: String?,
         zbtTransportEnabled: Boolean,
         ignoreExternalBt: Boolean,
-        cachedDaemonReachable: Boolean?
+        cachedDaemonReachable: Boolean?,
+        unixSocketAvailable: Boolean = false
     ): Boolean =
-        route(externalBtEvidence, zbtTransportEnabled, ignoreExternalBt, cachedDaemonReachable) ==
+        route(externalBtEvidence, zbtTransportEnabled, ignoreExternalBt, cachedDaemonReachable, unixSocketAvailable) ==
             Route.BLOCKED &&
             !needsDaemonMeasurement(
-                externalBtEvidence, zbtTransportEnabled, ignoreExternalBt, cachedDaemonReachable
+                externalBtEvidence, zbtTransportEnabled, ignoreExternalBt, cachedDaemonReachable, unixSocketAvailable
             )
 
     /**
@@ -89,7 +96,8 @@ object ExternalBtTransportPolicy {
         externalBtEvidence: String?,
         zbtTransportEnabled: Boolean,
         ignoreExternalBt: Boolean,
-        cachedDaemonReachable: Boolean?
-    ): Boolean = externalBtEvidence != null && !zbtTransportEnabled &&
+        cachedDaemonReachable: Boolean?,
+        unixSocketAvailable: Boolean = false
+    ): Boolean = externalBtEvidence != null && !unixSocketAvailable && !zbtTransportEnabled &&
         !ignoreExternalBt && cachedDaemonReachable == null
 }
